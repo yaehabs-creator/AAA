@@ -149,6 +149,13 @@ export const subscribeToClauses = (
   const q = query(clausesRef, orderBy('number'));
 
   return onSnapshot(q, (snapshot) => {
+    console.log(`Subscription snapshot for ${contractId}: ${snapshot.size} clauses`);
+    
+    // Check for permission errors
+    if (snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+      console.warn('Snapshot is from cache, might indicate permission issue');
+    }
+    
     const clauses: Clause[] = [];
     snapshot.forEach((doc) => {
       const data = doc.data();
@@ -176,8 +183,13 @@ export const subscribeToClauses = (
       return 0;
     });
 
+    console.log(`Calling callback with ${clauses.length} clauses`);
     callback(clauses);
   }, (error) => {
     console.error('Error in clause subscription:', error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+    // Still call callback with empty array on error to prevent UI from being stuck
+    callback([]);
   });
 };

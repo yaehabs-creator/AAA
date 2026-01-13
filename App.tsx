@@ -87,6 +87,7 @@ const App: React.FC = () => {
   const [projectName, setProjectName] = useState('');
   const [activeContractId, setActiveContractId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(false);
 
   // Smart Search States
   const [smartSearchQuery, setSmartSearchQuery] = useState('');
@@ -176,6 +177,7 @@ const App: React.FC = () => {
                 // Set default contract
                 if (contracts.length > 0) {
                   const defaultContract = contracts.find(c => c.id === 'HassanAllam') || contracts[0];
+                  setIsInitialLoad(true);
                   setActiveContractId(defaultContract.id);
                   setProjectName(defaultContract.meta.title);
                   
@@ -183,7 +185,18 @@ const App: React.FC = () => {
                   const loadedClauses = await loadClauses(defaultContract.id);
                   if (!isMounted) return;
                   setClauses(loadedClauses);
-                  setStatus(AnalysisStatus.COMPLETED);
+                  // If admin, show completed status (dashboard with clauses)
+                  // If non-admin, show IDLE status (contracts list) unless they have clauses
+                  if (profile.role === 'admin' || loadedClauses.length > 0) {
+                    setStatus(AnalysisStatus.COMPLETED);
+                  } else {
+                    setStatus(AnalysisStatus.IDLE);
+                  }
+                  // Allow subscription to take over after initial load
+                  setTimeout(() => setIsInitialLoad(false), 1000);
+                } else {
+                  // No contracts available - show IDLE (contracts list for non-admin, upload for admin)
+                  setStatus(AnalysisStatus.IDLE);
                 }
               } catch (err) {
                 console.error('Error loading contracts:', err);
@@ -232,12 +245,29 @@ const App: React.FC = () => {
   // Real-time clause updates
   useEffect(() => {
     if (activeContractId && isAuthenticated) {
+      console.log('Setting up clause subscription for contract:', activeContractId);
       const unsubscribe = subscribeToClauses(activeContractId, (updatedClauses) => {
-        setClauses(updatedClauses);
+        console.log('Clauses updated from subscription:', updatedClauses.length);
+        // Only update if not in initial load phase, or if we have clauses (to avoid clearing during initial load)
+        if (!isInitialLoad || updatedClauses.length > 0) {
+          setClauses(updatedClauses);
+        } else {
+          console.log('Skipping subscription update during initial load');
+        }
       });
-      return () => unsubscribe();
+      return () => {
+        console.log('Cleaning up clause subscription');
+        unsubscribe();
+      };
+    } else {
+      // Clear clauses when no contract is selected or user is not authenticated
+      if (!activeContractId || !isAuthenticated) {
+        console.log('Clearing clauses - no active contract or not authenticated');
+        setClauses([]);
+        setIsInitialLoad(false);
+      }
     }
-  }, [activeContractId, isAuthenticated]);
+  }, [activeContractId, isAuthenticated, isInitialLoad]);
 
   useEffect(() => { refreshLibrary(); }, []);
 
@@ -385,17 +415,47 @@ Return ONLY JSON. Do not add any extra text.`,
   };
 
   const handleContractChange = async (contractId: string) => {
+    setIsInitialLoad(true);
     setActiveContractId(contractId);
     try {
       const contract = availableContracts.find(c => c.id === contractId);
       if (contract) {
         setProjectName(contract.meta.title);
-        const loadedClauses = await loadClauses(contractId);
+        let loadedClauses = await loadClauses(contractId);
+        
+        // If no clauses in Firestore, check IndexedDB and migrate
+        if (loadedClauses.length === 0 && userRole === 'admin') {
+          console.log('No clauses in Firestore, checking IndexedDB...');
+          const indexedContracts = await getAllContracts();
+          const indexedContract = indexedContracts.find(c => {
+            const cId = c.id?.replace(/[^a-zA-Z0-9]/g, '') || c.name.replace(/[^a-zA-Z0-9]/g, '');
+            return cId === contractId || c.name === contract.meta.title;
+          });
+          
+          if (indexedContract && indexedContract.clauses.length > 0) {
+            console.log(`Found ${indexedContract.clauses.length} clauses in IndexedDB, migrating...`);
+            // Migrate clauses from IndexedDB
+            for (const clause of indexedContract.clauses) {
+              try {
+                await saveClause(contractId, clause);
+              } catch (err) {
+                console.error(`Error migrating clause ${clause.clause_number}:`, err);
+              }
+            }
+            // Reload clauses
+            loadedClauses = await loadClauses(contractId);
+            console.log(`Migrated ${loadedClauses.length} clauses to Firestore`);
+          }
+        }
+        
         setClauses(loadedClauses);
         setStatus(AnalysisStatus.COMPLETED);
+        // Allow subscription to take over after initial load
+        setTimeout(() => setIsInitialLoad(false), 1000);
       }
     } catch (err) {
       console.error('Error loading contract:', err);
+      setIsInitialLoad(false);
       setError('Failed to load contract');
     }
   };
@@ -407,6 +467,8 @@ Return ONLY JSON. Do not add any extra text.`,
     setAuthView('login');
     setClauses([]);
     setActiveContractId(null);
+    setIsInitialLoad(false);
+    setAvailableContracts([]);
   };
 
   const handleRenameArchive = async (e: React.MouseEvent, contract: SavedContract) => {
@@ -449,36 +511,86 @@ Return ONLY JSON. Do not add any extra text.`,
   };
 
   const handleImportContract = async (file: File) => {
+    setError(null);
+    setStatus(AnalysisStatus.ANALYZING);
+    setProgress(0);
+    
     try {
+      console.log('Starting import of file:', file.name);
       const text = await file.text();
+      console.log('File read, parsing JSON...');
       const contract: SavedContract = JSON.parse(text);
       
       // Validate the contract structure
-      if (!contract.id || !contract.name || !contract.clauses || !Array.isArray(contract.clauses)) {
-        throw new Error("Invalid contract file format. Missing required fields.");
+      if (!contract.name) {
+        throw new Error("Invalid contract file format. Missing 'name' field.");
+      }
+      if (!contract.clauses || !Array.isArray(contract.clauses)) {
+        throw new Error("Invalid contract file format. Missing or invalid 'clauses' array.");
+      }
+      if (contract.clauses.length === 0) {
+        throw new Error("Contract file contains no clauses.");
       }
 
-      // Generate new ID to avoid conflicts
-      const newId = crypto.randomUUID();
-      const importedContract: SavedContract = {
-        ...contract,
-        id: newId,
-        timestamp: contract.timestamp || Date.now()
-      };
+      console.log(`Importing contract: ${contract.name} with ${contract.clauses.length} clauses`);
 
-      await saveContractToDB(importedContract);
-      await refreshLibrary();
+      // Use the contract ID from the file, or generate a sanitized one
+      const contractId = (contract.id || contract.name).replace(/[^a-zA-Z0-9]/g, '') || `contract-${Date.now()}`;
+      console.log('Contract ID:', contractId);
       
-      // Optionally load the imported contract
-      setClauses(importedContract.clauses);
-      setProjectName(importedContract.name);
-      setActiveContractId(importedContract.id);
+      setProgress(10);
+      
+      // Create contract metadata in Firestore
+      try {
+        await createContract(contractId, contract.name);
+        console.log('Contract metadata created');
+      } catch (err: any) {
+        // Contract might already exist, that's okay
+        if (!err.message?.includes('already exists')) {
+          console.warn('Contract might already exist, continuing...');
+        }
+      }
+      
+      setProgress(20);
+      
+      // Save all clauses to Firestore
+      let successCount = 0;
+      const totalClauses = contract.clauses.length;
+      
+      for (let i = 0; i < contract.clauses.length; i++) {
+        const clause = contract.clauses[i];
+        try {
+          await saveClause(contractId, clause);
+          successCount++;
+          setProgress(20 + Math.floor((i + 1) / totalClauses * 70));
+        } catch (err) {
+          console.error(`Error importing clause ${clause.clause_number}:`, err);
+        }
+      }
+      
+      console.log(`Imported ${successCount}/${totalClauses} clauses`);
+      setProgress(90);
+      
+      // Refresh contracts list
+      const contracts = await loadContracts();
+      setAvailableContracts(contracts);
+      
+      // Load the imported contract
+      const loadedClauses = await loadClauses(contractId);
+      console.log(`Loaded ${loadedClauses.length} clauses from Firestore`);
+      
+      setClauses(loadedClauses);
+      setProjectName(contract.name);
+      setActiveContractId(contractId);
+      setProgress(100);
       setStatus(AnalysisStatus.COMPLETED);
       
-      alert(`Contract "${importedContract.name}" imported successfully!`);
+      alert(`Contract "${contract.name}" imported successfully!\n${loadedClauses.length} clauses loaded.`);
     } catch (err: any) {
       console.error("Import failed:", err);
-      alert(`Failed to import contract: ${err.message || "Invalid file format"}`);
+      setError(err.message || "Failed to import contract. Please check the file format.");
+      setStatus(AnalysisStatus.ERROR);
+      alert(`Failed to import contract: ${err.message || "Invalid file format"}\n\nCheck the browser console for details.`);
     }
   };
 
@@ -847,7 +959,7 @@ Return ONLY JSON. Do not add any extra text.`,
         )}
 
         <main className={`flex-1 overflow-y-auto px-10 py-12 custom-scrollbar ${status !== AnalysisStatus.COMPLETED ? 'max-w-7xl mx-auto' : ''}`}>
-          {status === AnalysisStatus.IDLE && (
+          {status === AnalysisStatus.IDLE && userRole === 'admin' && (
             <div className="space-y-16 animate-in fade-in duration-1000">
                <div className="text-center space-y-6">
                 <div className="inline-flex items-center gap-3 px-5 py-2 bg-white border border-aaa-blue/10 text-aaa-blue text-[10px] font-black uppercase tracking-[0.3em] rounded-full shadow-sm">
@@ -941,6 +1053,38 @@ Return ONLY JSON. Do not add any extra text.`,
                        RAPID SCAN (FAST)
                      </button>
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {status === AnalysisStatus.IDLE && userRole !== 'admin' && (
+            <div className="space-y-12 max-w-7xl mx-auto pb-20 animate-in fade-in duration-1000">
+              <div className="flex items-center justify-between border-b border-aaa-border pb-10">
+                <h2 className="text-5xl font-black text-aaa-blue tracking-tighter">Saved Contracts</h2>
+              </div>
+              {availableContracts.length === 0 ? (
+                <div className="text-center py-20">
+                  <p className="text-aaa-muted text-lg font-bold">No contracts available</p>
+                  <p className="text-aaa-muted text-sm mt-2">Contact an admin to upload contracts</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                  {availableContracts.map(contract => (
+                    <div 
+                      key={contract.id} 
+                      onClick={() => handleContractChange(contract.id)} 
+                      className={`group bg-white p-10 rounded-3xl border shadow-premium cursor-pointer transition-all relative flex flex-col hover:-translate-y-1 ${activeContractId === contract.id ? 'border-aaa-blue ring-2 ring-aaa-blue/10' : 'border-aaa-border hover:border-aaa-blue'}`}
+                    >
+                      <div className="flex justify-between items-start mb-8">
+                        <h4 className="text-3xl font-black text-aaa-text truncate tracking-tighter pr-16">{contract.meta.title}</h4>
+                      </div>
+                      <div className="mt-auto pt-8 border-t border-aaa-border flex justify-between items-center text-[10px] font-black uppercase text-aaa-muted tracking-widest">
+                        <span>{contract.meta.createdAt?.toDate ? new Date(contract.meta.createdAt.toDate()).toLocaleDateString() : 'Unknown date'}</span>
+                        <span className="px-3 py-1 bg-aaa-bg rounded-lg text-aaa-blue">View Contract</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1101,9 +1245,19 @@ Return ONLY JSON. Do not add any extra text.`,
                     ref={importFileRef} 
                     className="hidden" 
                     accept="application/json,.json" 
-                    onChange={(e) => e.target.files?.[0] && handleImportContract(e.target.files[0])} 
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        console.log('File selected:', file.name, file.size, 'bytes');
+                        handleImportContract(file);
+                      }
+                      // Reset input so same file can be selected again
+                      e.target.value = '';
+                    }}
                   />
-                  <button onClick={() => setStatus(AnalysisStatus.IDLE)} className="px-10 py-4 bg-aaa-blue text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-aaa-hover transition-all">New Extraction</button>
+                  {userRole === 'admin' && (
+                    <button onClick={() => setStatus(AnalysisStatus.IDLE)} className="px-10 py-4 bg-aaa-blue text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-aaa-hover transition-all">New Extraction</button>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
@@ -1158,7 +1312,15 @@ Return ONLY JSON. Do not add any extra text.`,
         ref={importFileRef} 
         className="hidden" 
         accept="application/json,.json" 
-        onChange={(e) => e.target.files?.[0] && handleImportContract(e.target.files[0])} 
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            console.log('File selected:', file.name, file.size, 'bytes');
+            handleImportContract(file);
+          }
+          // Reset input so same file can be selected again
+          e.target.value = '';
+        }}
       />
 
       <footer className="glass border-t border-aaa-border px-10 h-16 flex items-center justify-between z-10 shrink-0">
