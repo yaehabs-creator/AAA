@@ -1,0 +1,120 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AAA Contract Department</title>
+    <script>
+      window.process = window.process || { env: {} };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              aaa: {
+                blue: '#0F2E6B',
+                hover: '#091B40',
+                bg: '#F4F7FA',
+                border: '#D1D9E6',
+                text: '#1A2333',
+                muted: '#5C6B82',
+                accent: '#1E6CE8'
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace']
+            },
+            borderRadius: {
+              'aaa': '12px'
+            },
+            boxShadow: {
+              'premium': '0 10px 30px -10px rgba(15, 46, 107, 0.1)',
+              'inner-soft': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.05)'
+            }
+          }
+        }
+      }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #F4F7FA;
+        color: #1A2333;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+      .mono {
+        font-family: 'JetBrains Mono', monospace;
+      }
+      .glass {
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+      .shimmer {
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        background-size: 200% 100%;
+        animation: shimmer 2s infinite;
+      }
+      @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+      }
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #CBD5E1;
+        border-radius: 10px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #0F2E6B;
+      }
+      .contract-container {
+        scrollbar-gutter: stable;
+      }
+      
+      /* Internal Clause Hyperlinks */
+      .verbatim-content a {
+        color: #1E6CE8;
+        font-weight: 800;
+        text-decoration: underline;
+        text-underline-offset: 4px;
+        transition: all 0.2s ease;
+        padding: 0 2px;
+        border-radius: 4px;
+      }
+      .verbatim-content a:hover {
+        background-color: rgba(30, 108, 232, 0.1);
+        color: #0F2E6B;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
