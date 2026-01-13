@@ -2,7 +2,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from './firebase/config';
+import { auth, db } from './firebase/config';
+import { doc, setDoc, getDocs, collection, serverTimestamp } from 'firebase/firestore';
 import { analyzeContract } from './services/geminiService';
 import { saveContractToDB, getAllContracts, deleteContractFromDB } from './services/dbService';
 import { login, logout, getUserRole, getCurrentUser } from './services/authService';
@@ -126,7 +127,29 @@ const App: React.FC = () => {
         try {
           if (user) {
             console.log('User authenticated:', user.email);
-            const profile = await getUserRole(user.uid);
+            let profile = await getUserRole(user.uid);
+            
+            // If profile doesn't exist, create it (for users who signed up before profile creation was implemented)
+            if (!profile) {
+              console.log('Profile not found, creating one...');
+              try {
+                const usersSnapshot = await getDocs(collection(db, 'users'));
+                const isFirstUser = usersSnapshot.empty;
+                
+                await setDoc(doc(db, 'users', user.uid), {
+                  email: user.email || '',
+                  role: isFirstUser ? 'admin' : 'pending',
+                  createdAt: serverTimestamp()
+                });
+                
+                // Reload profile
+                profile = await getUserRole(user.uid);
+                console.log('Profile created with role:', profile?.role);
+              } catch (err) {
+                console.error('Error creating user profile:', err);
+              }
+            }
+            
             if (profile) {
               console.log('User role:', profile.role);
               if (!isMounted) return;
@@ -166,7 +189,7 @@ const App: React.FC = () => {
                 console.error('Error loading contracts:', err);
               }
             } else {
-              console.warn('User profile not found in Firestore');
+              console.error('Failed to create or retrieve user profile');
               if (!isMounted) return;
               setIsAuthenticated(false);
               setUserRole(null);
